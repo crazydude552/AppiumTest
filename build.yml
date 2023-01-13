@@ -1,0 +1,159 @@
+﻿#Test-selenium-template.yml
+
+variables:
+  BuildConfiguration: 'release'
+  BuildPlatform: 'any cpu'
+
+trigger:
+- develop
+- master
+
+stages:
+- stage: Build
+  jobs:
+  - job: MyJob
+    workspace:
+      #Cleans up all files and folders on the build agent
+      clean: all
+
+    pool:
+      name: Build
+      demands:
+      - AZP_Type_vs16_9
+
+    steps:
+    - task: ItgloPreBuild@1
+      inputs:
+        NpmRestore: false
+        SetNugetToken: false
+        NugetRestore: true
+        DotNetRestore: true
+        RetryNugetRestores: true
+        WorkingDirectory: '$(System.DefaultWorkingDirectory)'
+#Changing to dotnetcoreCLI
+#      #Build solution 
+#      #https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/build/visual-studio-build?view=azure-devops
+#    - task: VSBuild@1
+#      displayName: 'Build solution **\*.sln'
+#      condition: succeeded()
+#      inputs:
+#        platform: '$(BuildPlatform)'
+#        configuration: '$(BuildConfiguration)'
+#        clean: true
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+
+      #Copy files 
+      #https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/copy-files?view=azure-devops&tabs=yaml
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
+      inputs:
+        SourceFolder: '$(build.sourcesdirectory)'
+        Contents: |
+          **\bin\$(BuildConfiguration)\**
+          **\IntegrationTests\*.json
+        TargetFolder: '$(build.artifactstagingdirectory)'
+      condition: succeeded()
+    
+    #Copy files 
+    #https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/copy-files?view=azure-devops&tabs=yaml
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: $(build.artifactstagingdirectory)\$(BuildConfiguration)\'
+      inputs:
+        SourceFolder: '$(build.sourcesdirectory)'
+        Contents: '**\obj\$(BuildConfiguration)\BuildConfiguration\PackageTmp\**'
+        TargetFolder: '$(build.artifactstagingdirectory)\$(BuildConfiguration)\'
+      condition: succeeded()
+      
+    
+    #Delete files artifactstagingdirectory
+    #https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/delete-files?view=azure-devops
+    - task: DeleteFiles@1
+      displayName: 'Delete files from $(build.artifactstagingdirectory)'
+      condition: and(succeeded(), or(startsWith(variables['Build.SourceBranch'], 'refs/heads/develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/master'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release'), startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix')))
+      inputs:
+        SourceFolder: '$(build.artifactstagingdirectory)'
+        Contents: '*.zip'
+    
+    ##Archive files
+    ##https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/archive-files?view=azure-devops
+    #- task: ArchiveFiles@1
+    #  displayName: 'Archive files '
+    #  condition: and(succeeded(), or(startsWith(variables['Build.SourceBranch'], 'refs/heads/develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/master'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release'), startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix')))
+    #  inputs:
+    #    rootFolder: '$(build.artifactstagingdirectory)'
+    #    includeRootFolder: false
+    #    archiveFile: '$(Build.ArtifactStagingDirectory)/zip/$(Agent.Name).zip'
+    #
+    ##Publish build artifacts
+    ##https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/publish-build-artifacts?view=azure-devops
+    #- task: PublishBuildArtifacts@1
+    #  displayName: 'Publish Artifact: zip'
+    #  condition: and(succeeded(), or(startsWith(variables['Build.SourceBranch'], 'refs/heads/develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/master'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release'), startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix')))
+    #  inputs:
+    #    PathtoPublish: '$(Build.ArtifactStagingDirectory)/zip'
+    #    ArtifactName: zip
+    #    publishLocation: FilePath
+    #    TargetPath: '\\s-be-ki-d2d.ktn.group\VSTF_Builds\$(Build.DefinitionName)\$(Build.BuildNumber)'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+    #KTN Build cleanup
+    #https://tfs.katoennatie.com/tfs/ITGloCollection/Solutions/_wiki/wikis/Solutions.wiki?pagePath=%2FWelcome%2FBuild%2FKTN-Build-Cleanup&wikiVersion=GBwikiMaster
+    # - task: KTNBuildCleanUp@0
+    #   inputs:
+    #     WorkingDirectory: '$(System.DefaultWorkingDirectory)'
+    
+    #GitflowBranchGate
+    #https://marketplace.visualstudio.com/items?itemName=kerwincarpede.GitflowBranchGate
+    #https://github.com/kerwinc/VSTSTasks/tree/master/src/GitflowBranchGate
+    - task: kerwincarpede.GitflowBranchGate.gitflow-branch-gate-task.GitflowBranchGate@1
+      displayName: 'Gitflow Branch Gate'
+      condition: succeeded()
+      inputs:
+        releaseBranchDaysLimit: 100
+        masterMustNotHavePendingPullRequests: false
+        hotfixBranchesMustNotHavePendingPullRequests: false
+        hotfixMustNotBeBehindMaster: false
+        releaseMustNotBeBehindMaster: false
+        mustNotHaveHotfixAndReleaseBranches: false
+        featureBranchesMustNotBeBehindDevelop: true
+      continueOnError: true 
+      env:
+        SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+- stage: EMEA_TST
+  jobs:
+  - job: Release
+    pool:
+      name: poc
+      demands: 
+      - AZP_Type_genymotion
+    steps:
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'test'
+        projects: '**/*.csproj'
+        testRunTitle: 'Appium'
+#this will not work because we running linux on that agent     
+#   - task: ItgloSetVariables@1
+#     inputs:
+#       UseStrictTokenization: false
+#     timeoutInMinutes: 60
+#    - task: VisualStudioTestPlatformInstaller@1
+#      inputs:
+#        packageFeedSelector: 'nugetOrg'
+#        versionSelector: 'latestPreRelease'
+#    - task: VSTest@2
+#      inputs:
+#        testSelector: 'testAssemblies'
+#        testAssemblyVer2: |
+#          **\*test*.dll
+#          !**\*TestAdapter.dll
+#          !**\obj\**
+#        searchFolder: '$(System.DefaultWorkingDirectory)'
+  
